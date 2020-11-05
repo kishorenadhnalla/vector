@@ -34,7 +34,7 @@ impl Expression for IfStatement {
             Some(Value::Boolean(true)) => self.true_expression.execute(state, object),
             Some(Value::Boolean(false)) | None => self.false_expression.execute(state, object),
             Some(v) => Err(E::from(Error::from(value::Error::Expected(
-                Value::Boolean(true).kind(),
+                ValueKind::Boolean,
                 v.kind(),
             )))
             .into()),
