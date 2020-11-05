@@ -22,6 +22,7 @@ pub mod interface;
 mod lock;
 mod log_lookup;
 pub mod namespace;
+mod port_forward;
 mod reader;
 mod resource_file;
 mod temp_file;
@@ -39,6 +40,8 @@ pub use framework::Framework;
 pub use interface::Interface;
 pub use lock::lock;
 use log_lookup::log_lookup;
+use port_forward::port_forward;
+pub use port_forward::PortForwarder;
 pub use reader::Reader;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
