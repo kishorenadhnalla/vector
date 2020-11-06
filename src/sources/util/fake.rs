@@ -1,5 +1,5 @@
 use chrono::prelude::Local;
-use fakedata_generator::{gen_http_method, gen_ipv4, gen_username};
+use fakedata_generator::{gen_domain, gen_http_method, gen_ipv4, gen_username};
 use lazy_static::lazy_static;
 use rand::{thread_rng, Rng};
 
@@ -14,7 +14,8 @@ lazy_static! {
     static ref HTTP_VERSIONS: Vec<&'static str> = vec!["HTTP/1.0", "HTTP/1.1", "HTTP/2.0"];
     static ref ERROR_MESSAGES: Vec<&'static str> = vec!["something went wrong", "oops"];
     static ref APACHE_COMMON_TIME_FORMAT: &'static str = "%d/%b/%Y:%T %z";
-    static ref APACHE_ERROR_TIME_FORMAT: &'static str = "%a %b %d %T %T";
+    static ref APACHE_ERROR_TIME_FORMAT: &'static str = "%a %b %d %T %Y";
+    static ref SYSLOG_TIME_FORMAT: &'static str = "%Y-%m-%d:T";
 }
 
 pub fn apache_common_log_line() -> String {
@@ -35,8 +36,7 @@ pub fn apache_common_log_line() -> String {
 
 pub fn apache_error_log_line() -> String {
     // Example log line:
-    // [Sat Oct 31 19:27:55 2020] [deleniti:crit] [pid 879:tid 9607] [client 169.198.228.174:1364] Try to program the IB port, maybe it will hack the online transmitter!
-
+    // [Sat Oct 31 19:27:55 2020] [deleniti:crit] [pid 879:tid 9607] [client 169.198.228.174:1364] Something bad happened
     format!(
         "[{}] [{}:{}] [pid {}:tid] [client {}:{}] {}",
         timestamp_apache_error(),
@@ -49,6 +49,17 @@ pub fn apache_error_log_line() -> String {
     )
 }
 
+pub fn syslog_log_line() -> String {
+    // Example log line:
+    // <65>2 2020-11-05T18:11:43.975Z chiefubiquitous.io totam 6899 ID44 - Something bad happened
+    format!("<{}>{} {} {}",
+        prival(),
+        syslog_version(),
+        timestamp_syslog(),
+        domain(),
+    )
+}
+
 // Formatted timestamps
 fn timestamp_apache_common() -> String {
     Local::now().format(&APACHE_COMMON_TIME_FORMAT).to_string()
@@ -58,7 +69,15 @@ fn timestamp_apache_error() -> String {
     Local::now().format(&APACHE_ERROR_TIME_FORMAT).to_string()
 }
 
+fn timestamp_syslog() -> String {
+    Local::now().format(&SYSLOG_TIME_FORMAT).to_string()
+}
+
 // Other random strings
+fn domain() -> String {
+    gen_domain()
+}
+
 fn error_level() -> String {
     random_from_vec(ERROR_LEVELS.to_vec()).to_string()
 }
@@ -99,8 +118,16 @@ fn port() -> String {
     random_in_range(1024, 65535)
 }
 
+fn prival() -> String {
+    random_in_range(0, 191)
+}
+
 fn username() -> String {
     gen_username()
+}
+
+fn syslog_version() -> String {
+    random_in_range(1, 3)
 }
 
 // Helper functions

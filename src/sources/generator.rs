@@ -4,7 +4,7 @@ use crate::{
     internal_events::GeneratorEventProcessed,
     shutdown::ShutdownSignal,
     Pipeline,
-    sources::util::fake::{apache_common_log_line, apache_error_log_line},
+    sources::util::fake::{apache_common_log_line, apache_error_log_line, syslog_log_line},
 };
 use futures::{
     compat::Future01CompatExt,
@@ -14,7 +14,7 @@ use futures::{
 use futures01::{stream::iter_ok, Sink};
 use serde::{Deserialize, Serialize};
 use std::task::Poll;
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, Duration, Interval};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +38,7 @@ pub enum OutputFormat {
     },
     ApacheCommon,
     ApacheError,
+    Syslog,
 }
 
 struct Generator;
@@ -54,14 +55,15 @@ impl Generator {
             OutputFormat::ApacheError => {
                 apache_error_generate(config, shutdown, out).await
             }
+            OutputFormat::Syslog => {
+                syslog_generate(config, shutdown, out).await
+            }
         }
     }
 }
 
 async fn apache_common_generate(config: GeneratorConfig, mut shutdown: ShutdownSignal, mut out: Pipeline) -> Result<(), ()> {
-    let mut batch_interval = config
-        .batch_interval
-        .map(|i| interval(Duration::from_secs_f64(i)));
+    let mut batch_interval = get_batch_interval(config.batch_interval);
 
     for _ in 0..config.count {
         if matches!(futures::poll!(&mut shutdown), Poll::Ready(_)) {
@@ -72,9 +74,7 @@ async fn apache_common_generate(config: GeneratorConfig, mut shutdown: ShutdownS
             batch_interval.next().await;
         }
 
-        let log_line = apache_common_log_line();
-        let event = Event::from(log_line);
-        let events: Vec<Event> = vec![event];
+        let events = events_from_log_line(apache_common_log_line());
 
         let (sink, _) = out
             .clone()
@@ -89,9 +89,7 @@ async fn apache_common_generate(config: GeneratorConfig, mut shutdown: ShutdownS
 }
 
 async fn apache_error_generate(config: GeneratorConfig, mut shutdown: ShutdownSignal, mut out: Pipeline) -> Result<(), ()> {
-    let mut batch_interval = config
-        .batch_interval
-        .map(|i| interval(Duration::from_secs_f64(i)));
+    let mut batch_interval = get_batch_interval(config.batch_interval);
 
     for _ in 0..config.count {
         if matches!(futures::poll!(&mut shutdown), Poll::Ready(_)) {
@@ -102,9 +100,7 @@ async fn apache_error_generate(config: GeneratorConfig, mut shutdown: ShutdownSi
             batch_interval.next().await;
         }
 
-        let log_line = apache_error_log_line();
-        let event = Event::from(log_line);
-        let events: Vec<Event> = vec![event];
+        let events = events_from_log_line(apache_error_log_line());
 
         let (sink, _) = out
             .clone()
@@ -119,9 +115,7 @@ async fn apache_error_generate(config: GeneratorConfig, mut shutdown: ShutdownSi
 }
 
 async fn round_robin_generate(config: GeneratorConfig, sequence: &bool, items: &Vec<String>, mut shutdown: ShutdownSignal, mut out: Pipeline) -> Result<(), ()> {
-    let mut batch_interval = config
-        .batch_interval
-        .map(|i| interval(Duration::from_secs_f64(i)));
+    let mut batch_interval = get_batch_interval(config.batch_interval);
     let mut number: usize = 0;
 
     for _ in 0..config.count {
@@ -147,6 +141,32 @@ async fn round_robin_generate(config: GeneratorConfig, sequence: &bool, items: &
                 }
             })
             .collect::<Vec<Event>>();
+
+        let (sink, _) = out
+            .clone()
+            .send_all(iter_ok(events))
+            .compat()
+            .await
+            .map_err(|error| error!(message="Error sending generated lines.", %error))?;
+        out = sink;
+    }
+
+    Ok(())
+}
+
+async fn syslog_generate(config: GeneratorConfig, mut shutdown: ShutdownSignal, mut out: Pipeline) -> Result<(), ()> {
+    let mut batch_interval = get_batch_interval(config.batch_interval);
+
+    for _ in 0..config.count {
+        if matches!(futures::poll!(&mut shutdown), Poll::Ready(_)) {
+            break;
+        }
+
+        if let Some(batch_interval) = &mut batch_interval {
+            batch_interval.next().await;
+        }
+
+        let events = events_from_log_line(syslog_log_line());
 
         let (sink, _) = out
             .clone()
@@ -187,6 +207,14 @@ inventory::submit! {
 }
 
 impl_generate_config_from_default!(GeneratorConfig);
+
+fn events_from_log_line(log: String) -> Vec<Event> {
+    vec![Event::from(log)]
+}
+
+fn get_batch_interval(i: Option<f64>) -> Option<Interval> {
+    i.map(|i| interval(Duration::from_secs_f64(i)))
+}
 
 #[async_trait::async_trait]
 #[typetag::serde(name = "generator")]
