@@ -1,6 +1,21 @@
 use chrono::prelude::Local;
 use fakedata_generator::{gen_http_method, gen_ipv4, gen_username};
+use lazy_static::lazy_static;
 use rand::{thread_rng, Rng};
+
+lazy_static! {
+    static ref ERROR_LEVELS: Vec<&'static str> = vec![
+        "alert", "crit", "debug", "emerg", "error", "info", "notice", "trace1-8", "warn",
+    ];
+    static ref HTTP_CODES: Vec<usize> = vec![
+        200, 300, 301, 302, 304, 307, 400, 401, 403, 404, 410, 500, 501, 503, 550,
+    ];
+    static ref HTTP_ENDPOINTS: Vec<&'static str> = vec!["/foo", "/bar"];
+    static ref HTTP_VERSIONS: Vec<&'static str> = vec!["HTTP/1.0", "HTTP/1.1", "HTTP/2.0"];
+    static ref ERROR_MESSAGES: Vec<&'static str> = vec!["something went wrong", "oops"];
+    static ref APACHE_COMMON_TIME_FORMAT: &'static str = "%d/%b/%Y:%T %z";
+    static ref APACHE_ERROR_TIME_FORMAT: &'static str = "%a %b %d %T %T";
+}
 
 pub fn apache_common_log_line() -> String {
     // Example log line:
@@ -30,38 +45,30 @@ pub fn apache_error_log_line() -> String {
         pid(),
         ipv4_address(),
         port(),
-        message(),
+        error_message(),
     )
 }
 
 // Formatted timestamps
 fn timestamp_apache_common() -> String {
-    Local::now().format("%d/%b/%Y:%T %z").to_string()
+    Local::now().format(&APACHE_COMMON_TIME_FORMAT).to_string()
 }
 
 fn timestamp_apache_error() -> String {
-    Local::now().format("%a %b %d %T %T").to_string()
+    Local::now().format(&APACHE_ERROR_TIME_FORMAT).to_string()
 }
 
 // Other random strings
 fn error_level() -> String {
-    let levels: Vec<&'static str> = vec![
-        "alert", "crit", "debug", "emerg", "error", "info", "notice", "trace1-8", "warn",
-    ];
-    random_from_vec(levels).to_string()
+    random_from_vec(ERROR_LEVELS.to_vec()).to_string()
 }
 
 fn error_message() -> String {
-    let messages: Vec<&'static str> = vec!["Something bad happened"];
-    random_from_vec(messages).to_string()
+    random_from_vec(ERROR_MESSAGES.to_vec()).to_string()
 }
 
 fn http_code() -> String {
-    let codes: Vec<usize> = vec![
-        200, 300, 301, 302, 304, 307, 400, 401, 403, 404, 410, 500, 501, 503, 550,
-    ];
-
-    random_from_vec(codes).to_string()
+    random_from_vec(HTTP_CODES.to_vec()).to_string()
 }
 
 fn byte_size() -> String {
@@ -69,8 +76,7 @@ fn byte_size() -> String {
 }
 
 fn http_endpoint() -> String {
-    let endpoints: Vec<&'static str> = vec!["/foo", "/bar"];
-    random_from_vec(endpoints).into()
+    random_from_vec(HTTP_ENDPOINTS.to_vec()).into()
 }
 
 fn http_method() -> String {
@@ -78,17 +84,11 @@ fn http_method() -> String {
 }
 
 fn http_version() -> String {
-    let versions: Vec<&'static str> = vec!["HTTP/1.0", "HTTP/1.1", "HTTP/2.0"];
-    random_from_vec(versions).into()
+    random_from_vec(HTTP_VERSIONS.to_vec()).into()
 }
 
 fn ipv4_address() -> String {
     gen_ipv4()
-}
-
-fn message() -> String {
-    let messages: Vec<&'static str> = vec!["something went wrong", "oops"];
-    random_from_vec(messages).into()
 }
 
 fn pid() -> String {
