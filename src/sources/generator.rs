@@ -4,6 +4,7 @@ use crate::{
     internal_events::GeneratorEventProcessed,
     shutdown::ShutdownSignal,
     Pipeline,
+    sources::util::fake::{apache_common_log_line, apache_error_log_line},
 };
 use futures::{
     compat::Future01CompatExt,
@@ -19,23 +20,165 @@ use tokio::time::{interval, Duration};
 #[serde(deny_unknown_fields)]
 pub struct GeneratorConfig {
     #[serde(default)]
-    sequence: bool,
-    lines: Vec<String>,
-    #[serde(default)]
     batch_interval: Option<f64>,
     #[serde(default = "usize::max_value")]
     count: usize,
+    format: OutputFormat,
+}
+
+#[derive(Clone, Debug, Derivative, Deserialize, Serialize)]
+#[derivative(Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFormat {
+    #[derivative(Default)]
+    RoundRobin {
+        #[serde(default)]
+        sequence: bool,
+        items: Vec<String>,
+    },
+    ApacheCommon,
+    ApacheError,
+}
+
+struct Generator;
+
+impl Generator {
+    async fn generate(config: GeneratorConfig, shutdown: ShutdownSignal, out: Pipeline) -> Result<(), ()> {
+        match config.clone().format {
+            OutputFormat::RoundRobin { sequence, ref items } => {
+                round_robin_generate(config, &sequence, &items, shutdown, out).await
+            }
+            OutputFormat::ApacheCommon => {
+                apache_common_generate(config, shutdown, out).await
+            }
+            OutputFormat::ApacheError => {
+                apache_error_generate(config, shutdown, out).await
+            }
+        }
+    }
+}
+
+async fn apache_common_generate(config: GeneratorConfig, mut shutdown: ShutdownSignal, mut out: Pipeline) -> Result<(), ()> {
+    let mut batch_interval = config
+        .batch_interval
+        .map(|i| interval(Duration::from_secs_f64(i)));
+
+    for _ in 0..config.count {
+        if matches!(futures::poll!(&mut shutdown), Poll::Ready(_)) {
+            break;
+        }
+
+        if let Some(batch_interval) = &mut batch_interval {
+            batch_interval.next().await;
+        }
+
+        let log_line = apache_common_log_line();
+        let event = Event::from(log_line);
+        let events: Vec<Event> = vec![event];
+
+        let (sink, _) = out
+            .clone()
+            .send_all(iter_ok(events))
+            .compat()
+            .await
+            .map_err(|error| error!(message="Error sending generated lines.", %error))?;
+        out = sink;
+    }
+
+    Ok(())
+}
+
+async fn apache_error_generate(config: GeneratorConfig, mut shutdown: ShutdownSignal, mut out: Pipeline) -> Result<(), ()> {
+    let mut batch_interval = config
+        .batch_interval
+        .map(|i| interval(Duration::from_secs_f64(i)));
+
+    for _ in 0..config.count {
+        if matches!(futures::poll!(&mut shutdown), Poll::Ready(_)) {
+            break;
+        }
+
+        if let Some(batch_interval) = &mut batch_interval {
+            batch_interval.next().await;
+        }
+
+        let log_line = apache_error_log_line();
+        let event = Event::from(log_line);
+        let events: Vec<Event> = vec![event];
+
+        let (sink, _) = out
+            .clone()
+            .send_all(iter_ok(events))
+            .compat()
+            .await
+            .map_err(|error| error!(message="Error sending generated lines.", %error))?;
+        out = sink;
+    }
+
+    Ok(())
+}
+
+async fn round_robin_generate(config: GeneratorConfig, sequence: &bool, items: &Vec<String>, mut shutdown: ShutdownSignal, mut out: Pipeline) -> Result<(), ()> {
+    let mut batch_interval = config
+        .batch_interval
+        .map(|i| interval(Duration::from_secs_f64(i)));
+    let mut number: usize = 0;
+
+    for _ in 0..config.count {
+        if matches!(futures::poll!(&mut shutdown), Poll::Ready(_)) {
+            break;
+        }
+
+        if let Some(batch_interval) = &mut batch_interval {
+            batch_interval.next().await;
+        }
+
+        let events = items
+            .to_vec()
+            .iter()
+            .map(|line| {
+                emit!(GeneratorEventProcessed);
+
+                if *sequence {
+                    number += 1;
+                    Event::from(&format!("{} {}", number, line)[..])
+                } else {
+                    Event::from(&line[..])
+                }
+            })
+            .collect::<Vec<Event>>();
+
+        let (sink, _) = out
+            .clone()
+            .send_all(iter_ok(events))
+            .compat()
+            .await
+            .map_err(|error| error!(message="Error sending generated lines.", %error))?;
+        out = sink;
+    }
+
+    Ok(())
 }
 
 impl GeneratorConfig {
+    pub(self) fn generator(self, shutdown: ShutdownSignal, out: Pipeline) -> super::Source {
+        Box::new(self.inner(shutdown, out).boxed().compat())
+    }
+
     #[allow(dead_code)] // to make check-component-features pass
-    pub fn repeat(lines: Vec<String>, count: usize, batch_interval: Option<f64>) -> Self {
+    pub fn repeat(items: Vec<String>, count: usize, batch_interval: Option<f64>) -> Self {
         Self {
-            lines,
             count,
             batch_interval,
-            ..Self::default()
+            format: OutputFormat::RoundRobin {
+                items,
+                sequence: false,
+            },
         }
+    }
+
+    async fn inner(self, shutdown: ShutdownSignal, out: Pipeline) -> Result<(), ()> {
+        Generator::generate(self, shutdown, out).await
     }
 }
 
@@ -67,51 +210,6 @@ impl SourceConfig for GeneratorConfig {
     }
 }
 
-impl GeneratorConfig {
-    pub(self) fn generator(self, shutdown: ShutdownSignal, out: Pipeline) -> super::Source {
-        Box::new(self.inner(shutdown, out).boxed().compat())
-    }
-
-    async fn inner(self, mut shutdown: ShutdownSignal, mut out: Pipeline) -> Result<(), ()> {
-        let mut batch_interval = self
-            .batch_interval
-            .map(|i| interval(Duration::from_secs_f64(i)));
-        let mut number: usize = 0;
-
-        for _ in 0..self.count {
-            if matches!(futures::poll!(&mut shutdown), Poll::Ready(_)) {
-                break;
-            }
-
-            if let Some(batch_interval) = &mut batch_interval {
-                batch_interval.next().await;
-            }
-
-            let events = self
-                .lines
-                .iter()
-                .map(|line| {
-                    emit!(GeneratorEventProcessed);
-
-                    if self.sequence {
-                        number += 1;
-                        Event::from(&format!("{} {}", number, line)[..])
-                    } else {
-                        Event::from(&line[..])
-                    }
-                })
-                .collect::<Vec<Event>>();
-            let (sink, _) = out
-                .send_all(iter_ok(events))
-                .compat()
-                .await
-                .map_err(|error| error!(message="Error sending generated lines.", %error))?;
-            out = sink;
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,7 +238,7 @@ mod tests {
     async fn copies_lines() {
         let message_key = log_schema().message_key();
         let mut rx = runit(
-            r#"lines = ["one", "two"]
+            r#"format.round_robin.items = ["one", "two"]
                count = 1"#,
         )
         .await;
@@ -164,7 +262,7 @@ mod tests {
     #[tokio::test]
     async fn limits_count() {
         let mut rx = runit(
-            r#"lines = ["one", "two"]
+            r#"format.round_robin.items = ["one", "two"]
                count = 5"#,
         )
         .await;
@@ -179,9 +277,9 @@ mod tests {
     async fn adds_sequence() {
         let message_key = log_schema().message_key();
         let mut rx = runit(
-            r#"lines = ["one", "two"]
-               count = 2
-               sequence = true"#,
+            r#"format.round_robin.items = ["one", "two"]=
+               format.round_robin.sequence = true
+               count = 2"#,
         )
         .await;
 
@@ -205,7 +303,7 @@ mod tests {
     async fn obeys_batch_interval() {
         let start = Instant::now();
         let mut rx = runit(
-            r#"lines = ["one", "two"]
+            r#"format.round_robin.items = ["one", "two"]
                count = 3
                batch_interval = 1.0"#,
         )
