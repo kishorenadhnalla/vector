@@ -273,7 +273,7 @@ components: sinks: prometheus: {
 				\(_name)_count 6
 				\(_name)_min 0
 				\(_name)_max 4
-				\(_name)_avg 1				
+				\(_name)_avg 1
 				"""
 		},
 		{
@@ -301,7 +301,7 @@ components: sinks: prometheus: {
 				\(_name){host="\(_host)",quantile="0.5"} 2
 				\(_name){host="\(_host)",quantile="0.99"} 3
 				\(_name)_sum{host="\(_host)"} 12
-				\(_name)_count{host="\(_host)"} 6		
+				\(_name)_count{host="\(_host)"} 6
 				"""
 		},
 	]
@@ -342,4 +342,6 @@ components: sinks: prometheus: {
 				"""
 		}
 	}
+
+	telemetry: metrics: _prometheus_metrics
 }
